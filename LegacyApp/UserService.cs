@@ -1,36 +1,60 @@
-﻿using System;
+﻿using LegacyApp.Models;
+using LegacyApp.Providers;
+using LegacyApp.Repository;
+using LegacyApp.Services;
+using LegacyApp.Validators;
+using System;
 
 namespace LegacyApp
 {
     public class UserService
     {
+        private readonly IClientRepository _clientRepository;
+        private readonly IUserDataAccessProvider _userDataAccessProvider;
+        private readonly IUserValidator _userValidator;
+        private readonly ICreditLimitCalculationService _creditLimitCalculationService;
+
+        public UserService(
+            IClientRepository clientRepository,
+            IUserDataAccessProvider userDataAccessProvider,
+            IUserValidator userValidator,
+            ICreditLimitCalculationService creditLimitCalculationService
+            )
+        {
+            _clientRepository = clientRepository;
+            _userDataAccessProvider = userDataAccessProvider;
+            _userValidator = userValidator;
+            _creditLimitCalculationService = creditLimitCalculationService;
+        }
+
+        public UserService() : this(
+            new ClientRepository(), 
+            new UserDataAccessProvider(),
+            new UserValidator(new DateTimeProvider()),
+            new CreditLimitCalculationService(new UserCreditServiceClient())
+        )
+        {
+
+        }
+
         public bool AddUser(string firname, string surname, string email, DateTime dateOfBirth, int clientId)
         {
-            if (string.IsNullOrEmpty(firname) || string.IsNullOrEmpty(surname))
+            if (!_userValidator.HasValidFullName(firname, surname))
             {
                 return false;
             }
 
-            if (email.Contains("@") && !email.Contains("."))
+            if (!_userValidator.HasValidEmail(email))
             {
                 return false;
             }
 
-            var now = DateTime.Now;
-            int age = now.Year - dateOfBirth.Year;
-
-            if (now.Month < dateOfBirth.Month || (now.Month == dateOfBirth.Month && now.Day < dateOfBirth.Day))
-            {
-                age--;
-            }
-
-            if (age < 21)
+            if (!_userValidator.HasValidAge(dateOfBirth))
             {
                 return false;
             }
 
-            var clientRepository = new ClientRepository();
-            var client = clientRepository.GetById(clientId);
+            var client = _clientRepository.GetById(clientId);
 
             var user = new User
             {
@@ -41,39 +65,14 @@ namespace LegacyApp
                 Surname = surname
             };
 
-            if (client.Name == "VeryImportantClient")
-            {
-                // Skip credit chek
-                user.HasCreditLimit = false;
-            }
-            else if (client.Name == "ImportantClient")
-            {
-                // Do credit check and double credit limit
-                user.HasCreditLimit = true;
-                using (var userCreditService = new UserCreditServiceClient())
-                {
-                    var creditLimit = userCreditService.GetCreditLimit(user.Firstname, user.Surname, user.DateOfBirth);
-                    creditLimit = creditLimit * 2;
-                    user.CreditLimit = creditLimit;
-                }
-            }
-            else
-            {
-                // Do credit check
-                user.HasCreditLimit = true;
-                using (var userCreditService = new UserCreditServiceClient())
-                {
-                    var creditLimit = userCreditService.GetCreditLimit(user.Firstname, user.Surname, user.DateOfBirth);
-                    user.CreditLimit = creditLimit;
-                }
-            }
+            _creditLimitCalculationService.CalculateCreditLimit(client, user);
 
-            if (user.HasCreditLimit && user.CreditLimit < 500)
+            if (!_userValidator.HasValidCredit(user))
             {
                 return false;
             }
-            
-            UserDataAccess.AddUser(user);
+
+            _userDataAccessProvider.AddUser(user);
 
             return true;
         }
